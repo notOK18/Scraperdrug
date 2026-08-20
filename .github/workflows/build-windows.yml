@@ -1,10 +1,17 @@
 name: Build Windows app
 
-# Builds the Windows .exe for Drug Prices on a GitHub Windows machine.
+# Builds the Windows .exe for Drug Prices on a GitHub Windows machine and
+# attaches it to the "windows-latest" release. Releases are used rather than
+# build artifacts because artifacts are charged against a 500 MB account quota
+# that fills up quickly, and they expire after 90 days; a release asset does
+# neither and keeps a stable download link.
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
+permissions:
+  contents: write          # needed to create the release and upload to it
 
 jobs:
   build-windows:
@@ -41,9 +48,25 @@ jobs:
           --exclude-module PIL
           pricing_ui.py
 
-      - name: Upload the Windows app as a downloadable artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Drug-Prices-Windows
-          path: "dist/Drug Prices"
-          if-no-files-found: error
+      - name: Zip the build
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "dist/Drug Prices/*" `
+                           -DestinationPath "Drug-Prices-Windows.zip" `
+                           -CompressionLevel Optimal
+          "{0:N0} MB" -f ((Get-Item "Drug-Prices-Windows.zip").Length / 1MB)
+
+      - name: Publish it to the windows-latest release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Create the release once; every later build just replaces the asset,
+          # so the download link never changes.
+          gh release view windows-latest 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create windows-latest --title "Drug Prices - Windows" `
+               --notes "Latest Windows build. Unzip and run 'Drug Prices.exe'."
+          }
+          gh release upload windows-latest "Drug-Prices-Windows.zip" --clobber
+          Write-Host "Published: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/windows-latest"
