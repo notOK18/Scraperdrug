@@ -1,0 +1,49 @@
+name: Build Windows app
+
+# Builds the Windows .exe for Drug Prices on a GitHub Windows machine.
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: python -m pip install --upgrade pip setuptools wheel tkinterdnd2 pandas openpyxl lxml
+
+      - name: Install PyInstaller with a freshly compiled bootloader
+        # Building the bootloader from source produces a unique launcher stub that
+        # antivirus engines have no signature for -> avoids the "malware" false positive.
+        run: python -m pip install --no-binary pyinstaller "pyinstaller==6.11.1"
+
+      - name: Build the app with PyInstaller
+        shell: cmd
+        run: >
+          python -m PyInstaller --noconfirm --windowed --noupx --clean
+          --name "Drug Prices"
+          --collect-all tkinterdnd2
+          --collect-all lxml
+          --collect-all numpy
+          --collect-submodules pandas
+          --collect-submodules openpyxl
+          --exclude-module matplotlib
+          --exclude-module scipy
+          --exclude-module PIL
+          pricing_ui.py
+
+      - name: Upload the Windows app as a downloadable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Drug-Prices-Windows
+          path: "dist/Drug Prices"
+          if-no-files-found: error
