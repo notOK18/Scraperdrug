@@ -19,11 +19,12 @@ output, written as a live Excel formula.
 Usage:  python3 lndi.py [--refresh]
 """
 
-import re, sys, html, difflib, hashlib, argparse, threading, subprocess
+import re, ssl, sys, html, time, difflib, hashlib, argparse, threading
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import quote
+import urllib.request
+from urllib.parse import quote, urlencode
 
 import pandas as pd
 
@@ -93,26 +94,54 @@ FORM_WORDS = {"TAB", "TABS", "TABLET", "TABLETS", "CAP", "CAPS", "CAPSULE", "CAP
 
 # ---------------------------------------------------------------- http + cache
 
+def _ssl_context():
+    """A context with a CA bundle that is present inside a frozen app too. The
+    system Python's default store is not always usable, hence certifi."""
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
+
+
+SSL_CTX = _ssl_context()
+
+
+def download(url, post=None, tries=3):
+    """Fetch one page in-process.
+
+    Deliberately urllib and not a curl subprocess: a windowed app on Windows pops
+    up a console window for every child process, so a search flashed a black box
+    open and shut dozens of times."""
+    data = urlencode(post).encode() if post else None
+    request = urllib.request.Request(url, data=data, headers={"User-Agent": UA})
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=SSL_CTX))
+    problem = None
+    for attempt in range(tries):
+        try:
+            with opener.open(request, timeout=60) as response:
+                return response.read().decode("utf-8", "replace")
+        except Exception as exc:
+            problem = exc
+            if attempt + 1 < tries:
+                time.sleep(2 * (attempt + 1))
+    raise RuntimeError(f"could not reach {url}: {problem}")
+
+
 def fetch(url, post=None, tag=None):
-    """GET/POST through curl (the system Python has no usable CA bundle), with an
-    on-disk cache so re-parsing never re-hits the ministry's server."""
+    """A page, from the on-disk cache when we already have it, so re-parsing
+    never re-hits the ministry's server."""
     CACHE.mkdir(parents=True, exist_ok=True)   # ~/.drugprices itself may not exist yet
     key = tag or hashlib.sha1(f"{url}|{post}".encode()).hexdigest()[:16]
     path = CACHE / f"{key}.html"
     if path.exists() and not REFRESH:
         return path.read_text(encoding="utf-8", errors="replace")
 
-    cmd = ["curl", "-sS", "--compressed", "-A", UA, "--max-time", "60",
-           "--retry", "3", "--retry-delay", "2", url]
-    for k, v in (post or []):
-        cmd += ["--data-urlencode", f"{k}={v}"]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        raise RuntimeError(f"fetch failed for {url}: {r.stderr.strip()}")
+    body = download(url, post)
     tmp = path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
-    tmp.write_text(r.stdout, encoding="utf-8")
+    tmp.write_text(body, encoding="utf-8")
     tmp.replace(path)                     # atomic: threads may share a key
-    return r.stdout
+    return body
 
 
 # ---------------------------------------------------------------- html helpers
