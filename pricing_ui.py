@@ -248,8 +248,23 @@ class App:
             out = os.path.join(os.path.dirname(path), f"{stem} - Prices.xlsx")
             res, exc = lndi.run(lndi.Path(path), sheet, stratum=self.stratum_path,
                                 on_progress=self._tick)
-            lndi.write_output(res, exc, out)
+            try:
+                lndi.write_output(res, exc, out)
+            except PermissionError:
+                # Windows locks a file while Excel has it open, so overwriting the
+                # previous report fails outright. Say which file and why, rather
+                # than showing a traceback for something the user can just close.
+                raise lndi.InputError(
+                    f"Could not save to:\n{out}\n\n"
+                    "That file is open in Excel (or another program). Close it, "
+                    "then click Get Prices again — the lookups are already "
+                    "cached, so it will finish straight away.")
             self.root.after(0, lambda o=str(out): self._done(o, len(res), len(exc)))
+        except PermissionError as exc:
+            self.root.after(0, lambda m=str(exc): self._problem(
+                f"Windows denied access to a file:\n{m}\n\n"
+                "Check the file is not open elsewhere, and that the folder is "
+                "not read-only or still syncing to OneDrive."))
         except lndi.InputError as exc:
             # Bind the values now: Python unbinds `exc` when the except block
             # ends, so a bare closure would raise NameError on the main thread
